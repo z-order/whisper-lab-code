@@ -3,6 +3,7 @@
 # Run (production):  $ fastapi run {this-file}.py 
 #
 dev_mode = "local"  # "colab" or "local" or "lambda"
+UPLOAD_DIR = "./uploads" # Directory to save uploaded files
 
 import re
 import whisper
@@ -38,8 +39,9 @@ from whisper.utils import (
     str2bool,
 )
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form, Header, Depends
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from typing import List, Optional
 from pydantic import BaseModel
 import asyncio
 import datetime
@@ -47,8 +49,24 @@ import json
 import threading
 import queue
 import time
+import logging
+import shutil
+import os
 
 app = FastAPI()
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger('watchfiles').setLevel(logging.INFO)
+logging.getLogger('numba').setLevel(logging.INFO)
+logging.getLogger('multipart').setLevel(logging.INFO)
+logging.getLogger('whisper').setLevel(logging.DEBUG)
+logging.getLogger('decoding').setLevel(logging.DEBUG)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# Directory to save uploaded files
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Whisper model
 class WhisperDLModel:
@@ -65,7 +83,27 @@ class Item(BaseModel):
 
 # API: Audio transcription
 class AudioTranscriptionParams(BaseModel):
-    audio_file: str    
+    file: UploadFile
+    model: Optional[str] = None
+    response_format: Optional[str] = None
+    timestamp_granularities: Optional[List[str]] = None
+    temperature: Optional[float] = None
+    authorization: Optional[str] = None
+    
+async def get_audio_transcription_params(
+    file: UploadFile = File(...),
+    model: Optional[str] = Form(None),
+    response_format: Optional[str] = Form(None),
+    timestamp_granularities: Optional[List[str]] = Form(None),
+    temperature: Optional[float] = Form(None)
+) -> AudioTranscriptionParams:
+    return AudioTranscriptionParams(
+        file=file,
+        model=model,
+        response_format=response_format,
+        timestamp_granularities=timestamp_granularities,
+        temperature=temperature
+    )
 
 # Root path
 @app.get("/", response_class=HTMLResponse)
@@ -95,27 +133,40 @@ def delete_item(item_id: int):
 # curl -X 'POST' \
 #   'http://127.0.0.1:8000/api/v1/audio/transcriptions' \
 #   -H 'accept: application/json' \
-#   -H 'Content-Type: application/json' \
-#   -d '{
-#   "audio_file": "string"
-# }'
+#   -H 'Content-Type: multipart/form-data' \
+#   -F file=@./sample-shortform-audio-1.mp3 \
+#   -F "timestamp_granularities[]=segment" \
+#   -F model="whisper-1" \
+#   -F response_format="verbose_json"
 @app.post("/api/v1/audio/transcriptions")
-async def api_audio_transcriptions(params: AudioTranscriptionParams, request: Request):
-    print('params:', params)
-    if not whisper_dl_model.model_loaded:
-        status_code, status_text = 503, "Service Unavailable"
-        detail = f'{status_code} {status_text}'
-        raise HTTPException(status_code, detail)
-    return StreamingResponse(stream_audio_transcriptions(params, request), media_type="text/event-stream")
+async def api_audio_transcriptions(
+    params: AudioTranscriptionParams = Depends(get_audio_transcription_params),
+    request: Request = Request
+):
+    logger.info(f"Received parameters: file={params.file.filename}, "
+        f"model={params.model}, "
+        f"response_format={params.response_format}, "
+        f"timestamp_granularities={params.timestamp_granularities}, "
+        f"temperature={params.temperature}")
+    try:
+        autio_file_pathname = os.path.join(UPLOAD_DIR, params.file.filename)
+        with open(autio_file_pathname, "wb") as buffer:
+            shutil.copyfileobj(params.file.file, buffer)
+        logger.info(f"File saved to {autio_file_pathname}")
+        if not whisper_dl_model.model_loaded:
+            status_code, status_text = 503, "Service Unavailable"
+            detail = f'{status_code} {status_text}'
+            raise HTTPException(status_code, detail)
+        return StreamingResponse(stream_audio_transcriptions(params, request, autio_file_pathname), media_type="text/event-stream")        
+    
+    except Exception as error:
+        logger.error(f"api_audio_transcriptions() error: {str(error)}")
+        return JSONResponse(content={"error": str(error)}, status_code=500)
 
-async def stream_audio_transcriptions(params: AudioTranscriptionParams, request: Request):
+async def stream_audio_transcriptions(params: AudioTranscriptionParams, request: Request, autio_file_pathname: str):
     worker = AudioFileTranscriptionWorker(whisper_dl_model)
     start_time = datetime.datetime.now()
-    if dev_mode == "colab":
-        audio_file = './sample-shortform-audio-1.mp3'
-    else:
-        # audio_file = '../lab-tests/demucs-vocals.mp3'
-        audio_file = '../lab-tests/sample-shortform-audio-1.mp3'
+    audio_file = autio_file_pathname
     yield json.dumps({
         'status': 'queueing',
         'time': str(datetime.datetime.now()),
@@ -133,13 +184,13 @@ async def stream_audio_transcriptions(params: AudioTranscriptionParams, request:
                     }, ensure_ascii=False, indent=2) + "\n\n"
                 time.sleep(0.1)  # Small delay to avoid flooding
         except asyncio.CancelledError as e:
-            print(f"transcribe_generator() - CancelledError: {e}")                
+            logger.debug(f"transcribe_generator() - CancelledError: {e}")                
     tsg = ThreadedSyncGenerator(transcribe_generator)
     async def check_client_disconnect():
         worker.model.is_set_termination_signal = await request.is_disconnected()
         # This point is not reached by the asynio whereelse by the await call
         if worker.model.is_set_termination_signal:
-            print("Client disconnected")
+            logger.info("Client disconnected")
         return worker.model.is_set_termination_signal 
     tsg.set_break_func(check_client_disconnect, is_async=True)
     async def send_queueing_message_until_worker_response():
@@ -160,17 +211,17 @@ async def stream_audio_transcriptions(params: AudioTranscriptionParams, request:
             await asyncio.sleep(0.1)  # Small delay to avoid flooding
     except asyncio.CancelledError as e:
         worker.model.is_set_termination_signal = True # Falls down into here by asyncio whereelse by await call
-        print(f"stream_audio_transcriptions() - CancelledError: {e}")
+        logger.debug(f"stream_audio_transcriptions() - CancelledError: {e}")
     except TimeoutError as e:
-        print(f"stream_audio_transcriptions() - TimeoutError: {e}")
+        logger.error(f"stream_audio_transcriptions() - TimeoutError: {e}")
     except RuntimeError as e:
-        print(f"stream_audio_transcriptions() - RuntimeError: {e}")
+        logger.error(f"stream_audio_transcriptions() - RuntimeError: {e}")
     except Exception as e:
-        print(f"stream_audio_transcriptions() - Exception: {e}")
-    print('waiting for tsg.join() to complete...')
+        logger.error(f"stream_audio_transcriptions() - Exception: {e}")
+    logger.debug('waiting for tsg.join() to complete...')
     tsg.join()
     if await request.is_disconnected():
-        print("Client disconnected during transcription")
+        logger.info("Client disconnected during transcription")
         return  # End the generator if client disconnected
     yield json.dumps({
         'status': 'done',
@@ -198,14 +249,14 @@ class WhisperDLModel:
         return
 
     def load_whisper_model_old(self):
-        print('Loading whisper model...')
+        logger.info('Loading whisper model...')
         self.model = whisper.load_model(self.model_name, self.device, self.download_root, in_memory=True)
         self.model_loaded = True
-        print('Whisper model loaded.')
+        logger.info('Whisper model loaded.')
         return
 
     def load_whisper_model(self):
-        print('Loading whisper model...')
+        logger.info('Loading whisper model...')
         name = self.model_name
         device = self.device
         download_root = self.download_root
@@ -232,7 +283,7 @@ class WhisperDLModel:
         del checkpoint_file
         self.dims = ModelDimensions(**self.checkpoint["dims"])
         self.model_loaded = True
-        print('Whisper model loaded.')
+        logger.info('Whisper model loaded.')
         return
 
     def get_new_instance(self):
@@ -329,8 +380,8 @@ class AudioFileTranscriptionWorker:
         # writer_args = {arg: writer_options.pop(arg) for arg in word_options}
         for audio_path in transcribe_options.pop("audio"):
             try:
-                print(f"\nTranscribing ... {audio_path} on Whisper module - {whisper.__file__}")
-                print(f'\nmodel: Whisper({self.model_name})', 'audio_path:', audio_path, 'temperature:', temperature, 'decode_options:', decode_options, '\n')
+                logger.debug(f"Transcribing ... {audio_path} on Whisper module - {whisper.__file__}")
+                logger.debug(f'model: Whisper({self.model_name}), audio_path: {audio_path}, temperature: {temperature}, decode_options: {decode_options}')
                 def whisper_transcribe_generator():
                     for json_data in whisper.transcribe(model=self.model, audio=audio_path, 
                                                    verbose=transcribe_options['verbose'],
@@ -350,13 +401,13 @@ class AudioFileTranscriptionWorker:
                 for json_data in whisper_transcribe_generator():
                     yield json_data
                     time.sleep(0.1)  # Small delay to avoid flooding
+                # OpenAI's Whisper version
                 # result = whisper.transcribe(model=self.model, audio=audio_path, temperature=temperature, **decode_options)
-                # print('result:', result)
-                # yield json.dumps(result)
+                # logger.debug('result:', result)
                 # writer(result, audio_path, **writer_args)
             except Exception as e:
                 traceback.print_exc()
-                print(f"Skipping {audio_path} due to {type(e).__name__}: {str(e)}")
+                logger.warning(f"Skipping {audio_path} due to {type(e).__name__}: {str(e)}")
 
     async def transcribe_not_tested(self, audio_file: str, decoding_options: whisper.DecodingOptions):
         # load audio and pad/trim it to fit 30 seconds
@@ -366,15 +417,15 @@ class AudioFileTranscriptionWorker:
         mel = whisper.log_mel_spectrogram(audio).to(self.model.device)
         # detect the spoken language
         _, probs = self.model.detect_language(mel)
-        print(f"Detected language: {max(probs, key=probs.get)}")
+        logger.info(f"Detected language: {max(probs, key=probs.get)}")
         # decode the audio
         options = whisper.DecodingOptions()
-        print('options:', options)
-        print('decoding...')
+        logger.info('options:', options)
+        logger.info('decoding...')
         result = whisper.decode(self.model, mel, options)
-        print('decoding done.')
-        # print the recognized text
-        print(result.text)
+        logger.infp('decoding done.')
+        # log the recognized text
+        logger.info(result.text)
 
 class ThreadedSyncGenerator:
     def __init__(self, generator_func, *args, **kwargs):
@@ -397,22 +448,22 @@ class ThreadedSyncGenerator:
             gen = self.generator_func(*self.args, **self.kwargs)
             for item in gen:
                 if self.cancel_event.is_set():
-                    print('ThreadedSyncGenerator._run() cancelled.')
+                    logger.info('ThreadedSyncGenerator._run() cancelled.')
                     break
                 self.queue.put(item)
                 self.queue_event.set()
-                print('ThreadedSyncGenerator._run() put item:', item)
+                logger.info(f'ThreadedSyncGenerator._run() put item: {item}')
         except Exception as e:
             self.queue.put(('ERROR', str(e)))
         finally:
             if self.cancel_event.is_set():
                 self.queue.put(('CANCELLED', None))
                 self.queue_event.set()
-                print('ThreadedSyncGenerator._run() cancelled.')
+                logger.info('ThreadedSyncGenerator._run() cancelled.')
             else:
                 self.queue.put(('DONE', None))
                 self.queue_event.set()
-                print('ThreadedSyncGenerator._run() done.')
+                logger.info('ThreadedSyncGenerator._run() done.')
     
     def cancel(self):
         self.cancel_event.set()
@@ -432,7 +483,7 @@ class ThreadedSyncGenerator:
         while self.thread.is_alive() or not self.queue.empty():
             self.queue_event.wait(timeout=0.05) 
             if await self.break_func() if self.is_async_for_break_func else self.break_func():
-                print('ThreadedSyncGenerator.get_results() break_func()')
+                logger.debug('ThreadedSyncGenerator.get_results() break_func()')
                 self.cancel()
             await asyncio.sleep(0.05)
             while not self.queue.empty():
@@ -474,11 +525,11 @@ if __name__ == "__main__" and dev_mode == "colab":
     if ngrok_token:
         ngrok.set_auth_token(ngrok_token)
     else:
-        print("Warning: NGROK_AUTHTOKEN not set. Using ngrok without authentication.")
+        logger.warning("Warning: NGROK_AUTHTOKEN not set. Using ngrok without authentication.")
 
     # Set up ngrok
     ngrok_tunnel = ngrok.connect(8000)
-    print('Public URL:', ngrok_tunnel.public_url)
+    logger.info('Public URL:', ngrok_tunnel.public_url)
 
     # Run the FastAPI app
-    uvicorn.run(app, port=8000)    
+    uvicorn.run(app, host="0.0.0.0", port=8000)
