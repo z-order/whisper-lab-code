@@ -141,6 +141,9 @@ def transcribe(
     content_frames = mel.shape[-1] - N_FRAMES
     content_duration = float(content_frames * HOP_LENGTH / SAMPLE_RATE)
 
+    is_first_yield = True
+    logger.debug(f'content_frames: {content_frames}, content_duration: {content_duration}')
+
     if decode_options.get("language", None) is None:
         if not model.is_multilingual:
             decode_options["language"] = "en"
@@ -471,6 +474,9 @@ def transcribe(
                     start, end, text = segment["start"], segment["end"], segment["text"]
                     line = f"[{format_timestamp(start)} --> {format_timestamp(end)}] {text}"
                     text.strip()
+                    if is_first_yield:
+                        is_first_yield = False 
+                        yield {"language": decode_options["language"], "contentFrames": content_frames, "contentDuration": content_duration}
                     yield {"start": format_timestamp(start, True), "end": format_timestamp(end, True), "text": text}
                     print(make_safe(line))
 

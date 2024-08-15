@@ -6,6 +6,8 @@ dev_mode = "local"  # "colab" or "local" or "lambda"
 UPLOAD_DIR = "./uploads" # Directory to save uploaded files
 
 import re
+
+from sympy import per
 import whisper
 from whisper import available_models, _MODELS, _ALIGNMENT_HEADS, _download, ModelDimensions, Whisper
 import argparse
@@ -173,6 +175,8 @@ async def stream_audio_transcriptions(params: AudioTranscriptionParams, request:
         milliseconds = int(utc_time.microsecond / 1000)  # Convert microseconds to milliseconds
         formatted_time_with_ms = f"{formatted_time}.{milliseconds:03d}Z" # ISO 8601 format
         return formatted_time_with_ms
+    def convert_timestamp_to_seconds(timestamp: str):
+        return sum(float(x) * 60 ** i for i, x in enumerate(reversed(timestamp.split(":"))))
     yield json.dumps({
         'status': 'queueing',
         'time': get_current_timestamp(),
@@ -181,12 +185,23 @@ async def stream_audio_transcriptions(params: AudioTranscriptionParams, request:
     queueing_last_time = datetime.datetime.now()
     def transcribe_generator():
         try:
+            language, content_frames, content_duration = None, None, None
             for json_data in worker.transcribe(audio_file):
+                if json_data.get("language") is not None:
+                    language = json_data["language"]
+                    content_frames = json_data["contentFrames"]
+                    content_duration = json_data["contentDuration"]
+                    continue
+                elapsed = format_timestamp(time.time() - start_time)
+                progress = 0 if content_duration is None or json_data["end"] == '00:00:00.000' else round((convert_timestamp_to_seconds(json_data["end"]) / content_duration) * 100)
+                estimated = format_timestamp(convert_timestamp_to_seconds(elapsed) * (100-progress) / progress if progress > 0 else content_duration)
                 yield json.dumps({
                     'status': 'transcribing',
                     'data': json_data,
                     'time': get_current_timestamp(),
-                    'elapsed': format_timestamp(time.time() - start_time)
+                    'elapsed': elapsed,
+                    'progress': f'{progress}%',
+                    'estimated': estimated,
                     }, ensure_ascii=False, indent=2) + "\n\n"
                 time.sleep(0.1)  # Small delay to avoid flooding
         except asyncio.CancelledError as e:
