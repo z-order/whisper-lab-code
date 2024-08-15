@@ -165,12 +165,18 @@ async def api_audio_transcriptions(
 
 async def stream_audio_transcriptions(params: AudioTranscriptionParams, request: Request, autio_file_pathname: str):
     worker = AudioFileTranscriptionWorker(whisper_dl_model)
-    start_time = datetime.datetime.now()
+    start_time = time.time()
     audio_file = autio_file_pathname
+    def get_current_timestamp():
+        utc_time = datetime.datetime.now(datetime.UTC)
+        formatted_time = utc_time.strftime('%Y-%m-%dT%H:%M:%S')
+        milliseconds = int(utc_time.microsecond / 1000)  # Convert microseconds to milliseconds
+        formatted_time_with_ms = f"{formatted_time}.{milliseconds:03d}Z" # ISO 8601 format
+        return formatted_time_with_ms
     yield json.dumps({
         'status': 'queueing',
-        'time': str(datetime.datetime.now()),
-        'elapsed': str(datetime.datetime.now() - start_time)
+        'time': get_current_timestamp(),
+        'elapsed': format_timestamp(time.time() - start_time)
         }) + "\n\n"
     queueing_last_time = datetime.datetime.now()
     def transcribe_generator():
@@ -179,8 +185,8 @@ async def stream_audio_transcriptions(params: AudioTranscriptionParams, request:
                 yield json.dumps({
                     'status': 'transcribing',
                     'data': json_data,
-                    'time': str(datetime.datetime.now()),
-                    'elapsed': str(datetime.datetime.now() - start_time)
+                    'time': get_current_timestamp(),
+                    'elapsed': format_timestamp(time.time() - start_time)
                     }, ensure_ascii=False, indent=2) + "\n\n"
                 time.sleep(0.1)  # Small delay to avoid flooding
         except asyncio.CancelledError as e:
@@ -199,8 +205,8 @@ async def stream_audio_transcriptions(params: AudioTranscriptionParams, request:
         while (datetime.datetime.now() - queueing_last_time) >= queueing_interval:
             yield json.dumps({
                 'status': 'queueing', 
-                'time': str(datetime.datetime.now()),
-                'elapsed': str(datetime.datetime.now() - start_time)
+                'time': get_current_timestamp(),
+                'elapsed': format_timestamp(time.time() - start_time)
             }) + "\n\n"
             queueing_last_time = datetime.datetime.now()
     tsg.set_wait_func(send_queueing_message_until_worker_response, is_async=True, is_generator=True)
@@ -225,8 +231,8 @@ async def stream_audio_transcriptions(params: AudioTranscriptionParams, request:
         return  # End the generator if client disconnected
     yield json.dumps({
         'status': 'done',
-        'time': str(datetime.datetime.now()),
-        'elapsed': str(datetime.datetime.now() - start_time)
+        'time': get_current_timestamp(),
+        'elapsed': format_timestamp(time.time() - start_time)
         })+ "\n\n"
     #
     # References:
