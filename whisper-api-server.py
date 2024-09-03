@@ -1,10 +1,28 @@
 #
+# Whisper API Server
+#
 # Python version: 3.12.4
+#
+#   [Install OpenAI Whisper]
+#   $ python3 -m pip install --upgrade pip
+#   $ git clone https://github.com/openai/whisper.git 
+#     or
+#   $ git clone https://github.com/{id}/{repository}.git
+#   $ cd {repository}
+#   $ pip install .
+#
+#   [Install Whisper API Server]
+#   $ sudo apt update
+#   $ python3 -m pip install --upgrade pip
+#   $ git clone https://github.com/{id}/{repository}.git
+#   $ cd {repository}
 #   $ sudo apt install python3.12
 #   $ pip install -r requirements.txt
+#   $ pip install "fastapi[standard]"
 #
 # Run (Development): $ fastapi dev {this-file}.py 
 # Run (production):  $ fastapi run {this-file}.py 
+# Check CUDA/GPUs:   $ nvidia-smi
 #
 dev_mode = "local"  # "colab" or "local" or "lambda"
 UPLOAD_DIR = "./uploads" # Directory to save uploaded files
