@@ -1,4 +1,8 @@
 #
+# Python version: 3.12.4
+#   $ sudo apt install python3.12
+#   $ pip install -r requirements.txt
+#
 # Run (Development): $ fastapi dev {this-file}.py 
 # Run (production):  $ fastapi run {this-file}.py 
 #
@@ -170,7 +174,7 @@ async def stream_audio_transcriptions(params: AudioTranscriptionParams, request:
     start_time = time.time()
     audio_file = autio_file_pathname
     def get_current_timestamp():
-        utc_time = datetime.datetime.now(datetime.UTC)
+        utc_time = datetime.datetime.now(datetime.timezone.utc)
         formatted_time = utc_time.strftime('%Y-%m-%dT%H:%M:%S')
         milliseconds = int(utc_time.microsecond / 1000)  # Convert microseconds to milliseconds
         formatted_time_with_ms = f"{formatted_time}.{milliseconds:03d}Z" # ISO 8601 format
