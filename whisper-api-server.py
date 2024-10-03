@@ -17,8 +17,8 @@
 #   $ git clone https://github.com/{id}/{repository}.git
 #   $ cd {repository}
 #   $ sudo apt install python3.12
-#   $ pip install -r requirements.txt
-#   $ pip install "fastapi[standard]"
+#   $ pip3 install -r requirements.txt
+#   $ pip3 install "fastapi[standard]"
 #
 # Run (Development): $ fastapi dev {this-file}.py 
 # Run (production):  $ fastapi run {this-file}.py 
