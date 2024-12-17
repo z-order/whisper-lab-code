@@ -64,6 +64,9 @@ which pip
 
 ## Reinstall the latest Python version ##
 
+# Reboot System
+sudo reboot
+
 # Update System Packages
 sudo apt update && sudo apt upgrade -y
 
@@ -129,7 +132,8 @@ sudo add-apt-repository ppa:deadsnakes/ppa
 sudo apt update
 
 # Install the desired version (e.g., Python 3.12):
-sudo apt install python3.12 python3.12-venv python3.12-distutils -y
+# sudo apt install python3.12 python3.12-venv python3.12-distutils -y
+sudo apt install python3.12 python3.12-venv -y
 
 # Set it as the default:
 sudo update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
@@ -191,7 +195,8 @@ cd /home/ubuntu/{your-project-home}/openai-whisper-ws
 pip install -r requirements.txt
 sudo apt-get install python3-setuptools
 python -m pip install --upgrade setuptools
-python -m pip install --user wheel build
+# python -m pip install --user wheel build
+python -m pip install wheel build
 python -m build
 python -m pip install dist/*.whl
 
