@@ -24,7 +24,7 @@
 # Run (production):  $ fastapi run {this-file}.py 
 # Check CUDA/GPUs:   $ nvidia-smi
 #
-dev_mode = "local"  # "colab" or "local" or "lambda"
+dev_mode = "local"  # "colab" or "local" or "lambda" or "aica"
 UPLOAD_DIR = "./uploads" # Directory to save uploaded files
 
 import re
@@ -283,7 +283,7 @@ async def stream_audio_transcriptions(params: AudioTranscriptionParams, request:
 class WhisperDLModel:
     def __init__(self):
         self.model_name = 'large'
-        self.device = 'cuda' if dev_mode == "colab" or dev_mode == "lambda" else 'cpu'
+        self.device = 'cuda' if dev_mode == "colab" or dev_mode == "lambda" or dev_mode == "aica" else 'cpu'
         self.download_root = '../model'
         self.model_loaded: bool = False
         self.checkpoint = None
