@@ -1,10 +1,11 @@
-numba
-numpy
-torch
-tqdm
-more-itertools
-tiktoken
-triton>=2.0.0,<3;platform_machine=="x86_64" and sys_platform=="linux" or sys_platform=="linux2"
+numba==0.60.0
+numpy==2.0.1
+torch==2.4.0
+tqdm==4.66.4
+more-itertools==10.3.0
+tiktoken==0.7.0
+triton>=2.0.0,<=3.0.0
+# triton>=2.0.0,<3;platform_machine=="x86_64" and sys_platform=="linux" or sys_platform=="linux2"
 whisper
-fastapi
-pydantic
+fastapi==0.111.1
+pydantic==2.8.2
