@@ -289,11 +289,53 @@ class WhisperDLModel:
         self.checkpoint = None
         self.dims = None
         self.alignment_heads = None
+        # Add counter for round-robin GPU allocation
+        self._current_gpu = 0
+        self._num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
         return
 
-    def load_whisper_model_old(self):
+    def _get_next_gpu(self):
+        """Round-robin GPU selection"""
+        if self._num_gpus == 0:
+            return 'cpu'
+        gpu_id = self._current_gpu
+        self._current_gpu = (self._current_gpu + 1) % self._num_gpus
+        return f'cuda:{gpu_id}'
+
+    def load_whisper_model_old_v1(self):
         logger.info('Loading whisper model...')
         self.model = whisper.load_model(self.model_name, self.device, self.download_root, in_memory=True)
+        self.model_loaded = True
+        logger.info('Whisper model loaded.')
+        return
+
+    def load_whisper_model_old_v2(self):
+        logger.info('Loading whisper model...')
+        name = self.model_name
+        device = self.device
+        download_root = self.download_root
+        in_memory = True
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        if download_root is None:
+            default = os.path.join(os.path.expanduser("~"), ".cache")
+            download_root = os.path.join(os.getenv("XDG_CACHE_HOME", default), "whisper")
+        if name in _MODELS:
+            checkpoint_file = _download(*_MODELS[name], download_root, in_memory)
+            self.alignment_heads = _ALIGNMENT_HEADS[name]
+        elif os.path.isfile(name):
+            checkpoint_file = open(name, "rb").read() if in_memory else name
+            self.alignment_heads = None
+        else:
+            raise RuntimeError(
+                f"Model {name} not found; available models = {available_models()}"
+            )
+        with (
+            io.BytesIO(checkpoint_file) if in_memory else open(checkpoint_file, "rb")
+        ) as fp:
+            self.checkpoint = torch.load(fp, map_location=device)
+        del checkpoint_file
+        self.dims = ModelDimensions(**self.checkpoint["dims"])
         self.model_loaded = True
         logger.info('Whisper model loaded.')
         return
@@ -330,11 +372,16 @@ class WhisperDLModel:
         return
 
     def get_new_instance(self):
+        # Get next GPU in round-robin fashion
+        target_device = self._get_next_gpu()
+        logger.info(f'Creating new instance on device: {target_device}')
+        # Create a new instance of the model and load the checkpoint
         model = Whisper(self.dims)
         model.load_state_dict(self.checkpoint["model_state_dict"])
         if self.alignment_heads is not None:
             model.set_alignment_heads(self.alignment_heads)
-        return model.to(self.device)
+        # Move model to specific GPU
+        return model.to(target_device)
 
 class AudioFileTranscriptionWorker:
     def __init__(self, whisper_dl_model: WhisperDLModel):
